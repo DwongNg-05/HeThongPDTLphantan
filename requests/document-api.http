@@ -1,0 +1,48 @@
+@api = http://localhost:5000
+
+### Kiem tra API
+GET {{api}}/
+
+### 1. Tao tai lieu / ho so can phe duyet (draft) -> 201 Created
+# @name create
+POST {{api}}/documents
+Content-Type: application/json
+
+{
+  "title": "De xuat mua thiet bi phong lab",
+  "content": "Mua 10 may tinh cho phong thuc hanh.",
+  "createdBy": "NV001",
+  "approverCode": "QL001"
+}
+
+@id = {{create.response.body.$.id}}
+
+### 2. Danh sach tai lieu (loc: status, createdBy, approverCode)
+GET {{api}}/documents?approverCode=QL001
+
+### 3. Chi tiet tai lieu (kem lich su xu ly)
+GET {{api}}/documents/{{id}}
+
+### 4. Gui tai lieu: draft -> pending (phat su kien document.submitted)
+POST {{api}}/documents/{{id}}/submit
+Content-Type: application/json
+
+{ "performedBy": "NV001" }
+
+### 5a. Phe duyet: pending -> approved
+POST {{api}}/documents/{{id}}/approve
+Content-Type: application/json
+
+{ "reviewerCode": "QL001", "comment": "Dong y" }
+
+### 5b. Tu choi: pending -> rejected (bat buoc co ly do)
+POST {{api}}/documents/{{id}}/reject
+Content-Type: application/json
+
+{ "reviewerCode": "QL001", "comment": "Thieu bao gia" }
+
+### Loi 400: thieu tieu de
+POST {{api}}/documents
+Content-Type: application/json
+
+{ "title": "", "createdBy": "NV001", "approverCode": "QL001" }
