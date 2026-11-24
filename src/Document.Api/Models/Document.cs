@@ -32,6 +32,15 @@ public class Document
         });
         Status = newStatus;
     }
+
+    // Hoan tac lan chuyen trang thai gan nhat (dung khi buoc sau, vd. publish su kien, that bai)
+    public void RevertLastChange()
+    {
+        if (History.Count < 2) return;
+        var last = History.MaxBy(h => h.At)!;
+        History.Remove(last);
+        Status = last.FromStatus ?? DocumentStatus.Draft;
+    }
 }
 
 public class DocumentHistory

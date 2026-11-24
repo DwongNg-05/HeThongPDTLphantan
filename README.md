@@ -35,7 +35,17 @@ hethongpheduyettl/
 | POST | `/documents/{id}/approve` | pending → approved | `document.approved` |
 | POST | `/documents/{id}/reject` | pending → rejected (bắt buộc lý do) | `document.rejected` |
 
-Mã lỗi: `400` dữ liệu sai · `403` không phải người tạo/người duyệt · `404` không có tài liệu · `409` sai trạng thái.
+Mã lỗi: `400` dữ liệu sai · `403` không phải người tạo/người duyệt · `404` không có tài liệu · `409` sai trạng thái · `503` không phát được sự kiện lên RabbitMQ (khi submit: tài liệu được hoàn tác về draft để gửi lại).
+
+## Luồng gửi tài liệu vào quy trình phê duyệt
+
+1. Người tạo gọi `POST /documents/{id}/submit` với `{ "performedBy": "<mã người tạo>" }`.
+2. Document.Api kiểm tra (người gửi = người tạo, trạng thái = draft), chuyển sang `pending`, ghi lịch sử `submitted`.
+3. Document.Api publish `DocumentSubmittedEvent` lên exchange `document.events` (topic) với routing key `document.submitted` (persistent, có publisher confirm).
+4. Notification.Service consume queue `notification.document-events` (bind `document.*`) và đẩy `DocumentNotification` qua SignalR tới group `user:{approverCode}`.
+5. Client kết nối `http://localhost:5001/hubs/notifications?userCode=QL001` và nhận method `DocumentNotification`.
+
+Phê duyệt/từ chối dùng cùng cơ chế, thông báo gửi tới người tạo.
 
 Dữ liệu: tài liệu, người tạo (`createdBy`), người phê duyệt (`approverCode`), trạng thái, lịch sử xử lý (`history`).
 
@@ -45,11 +55,9 @@ Dữ liệu: tài liệu, người tạo (`createdBy`), người phê duyệt (`
 docker compose up -d
 dotnet run --project src/Document.Api
 dotnet run --project src/Notification.Service
-dotnet run --project src/Document.Client -- http://localhost:5000
+dotnet run --project src/Document.Client -- http://localhost:5000 http://localhost:5001
 ```
 
 ## Việc còn lại (TODO)
 - `Document.Api/Data`: thay `InMemoryDocumentRepository` bằng EF Core + SQL Server.
-- `Document.Api/Messaging/RabbitMqEventPublisher`: dùng `RabbitMQ.Client` để publish thật.
-- `Notification.Service/Consumers`: consume queue và gọi SignalR hub.
-- `Document.Client`: kết nối SignalR để nhận thông báo thời gian thực.
+- Outbox pattern để đảm bảo DB và sự kiện nhất quán khi chuyển sang EF Core.

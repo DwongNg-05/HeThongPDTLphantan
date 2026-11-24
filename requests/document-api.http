@@ -29,6 +29,18 @@ Content-Type: application/json
 
 { "performedBy": "NV001" }
 
+### 4b. Loi 403: nguoi gui khong phai nguoi tao
+POST {{api}}/documents/{{id}}/submit
+Content-Type: application/json
+
+{ "performedBy": "NV999" }
+
+### 4c. Loi 409: gui lai tai lieu da o trang thai pending
+POST {{api}}/documents/{{id}}/submit
+Content-Type: application/json
+
+{ "performedBy": "NV001" }
+
 ### 5a. Phe duyet: pending -> approved
 POST {{api}}/documents/{{id}}/approve
 Content-Type: application/json

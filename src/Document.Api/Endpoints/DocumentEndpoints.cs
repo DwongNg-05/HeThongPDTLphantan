@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Document.Api.Data;
 using Document.Api.Messaging;
 using Document.Api.Models;
@@ -83,10 +84,11 @@ public static class DocumentEndpoints
     }
 
     // ===== Gui tai lieu =====
-    private static async Task<IResult> SubmitAsync(Guid id, SubmitDocumentRequest request,
-        IDocumentRepository repo, IEventPublisher publisher)
+    // draft -> pending, phat su kien document.submitted de Notification.Service bao cho nguoi phe duyet.
+    private static async Task<IResult> SubmitAsync(Guid id, SubmitDocumentRequest? request,
+        IDocumentRepository repo, IEventPublisher publisher, ILoggerFactory loggerFactory)
     {
-        if (string.IsNullOrWhiteSpace(request.PerformedBy))
+        if (string.IsNullOrWhiteSpace(request?.PerformedBy))
             return BadRequest("INVALID_SUBMIT", "Thieu ma nguoi gui.");
 
         var doc = await repo.GetByIdAsync(id);
@@ -94,19 +96,49 @@ public static class DocumentEndpoints
 
         if (!doc.CreatedBy.Equals(request.PerformedBy.Trim(), StringComparison.OrdinalIgnoreCase))
             return Forbidden("NOT_DOCUMENT_OWNER", "Chi nguoi tao moi duoc gui tai lieu.");
-        if (doc.Status != DocumentStatus.Draft)
-            return Conflict("INVALID_STATE", $"Chi gui duoc tai lieu o trang thai draft (hien tai: {Status(doc.Status)}).");
 
-        var now = DateTimeOffset.UtcNow;
-        doc.SubmittedAt = now;
-        doc.ChangeStatus("submitted", DocumentStatus.Pending, doc.CreatedBy, null, now);
-        await repo.UpdateAsync(doc);
+        // Khoa theo tai lieu: tranh 2 request submit dong thoi cung vuot qua kiem tra trang thai
+        var gate = SubmitLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
+        {
+            if (doc.Status != DocumentStatus.Draft)
+                return Conflict("INVALID_STATE", $"Chi gui duoc tai lieu o trang thai draft (hien tai: {Status(doc.Status)}).");
+            if (string.IsNullOrWhiteSpace(doc.ApproverCode))
+                return BadRequest("INVALID_APPROVER", "Tai lieu chua co nguoi phe duyet.");
 
-        await publisher.PublishAsync(MessagingConstants.RoutingKeySubmitted,
-            new DocumentSubmittedEvent(doc.Id, doc.Title, doc.CreatedBy, doc.ApproverCode, now));
+            var now = DateTimeOffset.UtcNow;
+            doc.SubmittedAt = now;
+            doc.ChangeStatus("submitted", DocumentStatus.Pending, doc.CreatedBy, null, now);
+            await repo.UpdateAsync(doc);
 
-        return Results.Ok(ToDto(doc));
+            try
+            {
+                await publisher.PublishAsync(MessagingConstants.RoutingKeySubmitted,
+                    new DocumentSubmittedEvent(doc.Id, doc.Title, doc.CreatedBy, doc.ApproverCode, now));
+            }
+            catch (EventPublishException ex)
+            {
+                // Khong bao duoc cho nguoi phe duyet -> hoan tac ve draft de nguoi tao gui lai sau
+                loggerFactory.CreateLogger("Document.Submit")
+                    .LogError(ex, "Gui tai lieu {DocumentId} that bai, hoan tac ve draft", doc.Id);
+                doc.RevertLastChange();
+                doc.SubmittedAt = null;
+                await repo.UpdateAsync(doc);
+                return Results.Json(
+                    new ApiError("MESSAGING_UNAVAILABLE", "He thong thong bao tam thoi khong kha dung, vui long gui lai sau."),
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(ToDto(doc));
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
+
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> SubmitLocks = new();
 
     // ===== Phe duyet / tu choi =====
     private static async Task<IResult> ReviewAsync(Guid id, ReviewDocumentRequest request, bool approve,
